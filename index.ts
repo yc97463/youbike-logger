@@ -21,17 +21,27 @@ const MONGODB_URI = process.env.MONGODB_URI || "mongodb://mongo:cc@mongodb.zeabu
 const DB_NAME = "youbike-log-hualien";
 const COLLECTION_NAME = "parking_info";
 
+let cachedClient: MongoClient | null = null;
 let cachedDb: Db | null = null;
 
 async function connectToDatabase(): Promise<Db> {
     if (cachedDb) {
         return cachedDb;
     }
-    const client = new MongoClient(MONGODB_URI);
-    await client.connect();
+    cachedClient = new MongoClient(MONGODB_URI);
+    await cachedClient.connect();
     console.log("🔌 Connected to MongoDB");
-    cachedDb = client.db(DB_NAME);
+    cachedDb = cachedClient.db(DB_NAME);
     return cachedDb;
+}
+
+async function closeDatabase() {
+    if (cachedClient) {
+        await cachedClient.close();
+        console.log("🔌 Closed MongoDB connection");
+        cachedClient = null;
+        cachedDb = null;
+    }
 }
 
 export const handler = async () => {
@@ -108,10 +118,14 @@ export const handler = async () => {
 // Docker 進入點
 if (require.main === module) {
     handler()
-        .then(() => console.log("✅ Job cycle finished"))
-        .catch((err) => {
+        .then(async () => {
+            console.log("✅ Job cycle finished");
+            await closeDatabase();
+        })
+        .catch(async (err) => {
             // 這裡只印簡單訊息，詳細錯誤在 handler 內已經印過了
             console.error("🔥 Job cycle failed");
+            await closeDatabase();
             // 注意：這裡不執行 process.exit(1)，以免 Docker 容器整個掛掉重啟，
             // 我們讓它自然結束，等待下一次 loop (由 Dockerfile 中的 while loop 控制)
         });
