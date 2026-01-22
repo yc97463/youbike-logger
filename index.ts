@@ -94,16 +94,9 @@ export const handler = async () => {
         const db = await connectToDatabase();
         const collection = db.collection(COLLECTION_NAME);
 
-        const operations = documentsToSave.map(doc => ({
-            updateOne: {
-                filter: { station_no: doc.station_no },
-                update: { $set: doc },
-                upsert: true
-            }
-        }));
-
-        const result = await collection.bulkWrite(operations);
-        console.log(`💾 [${fetchTime.toISOString()}] Success! Matched: ${result.matchedCount}, Modified: ${result.modifiedCount}, Upserted: ${result.upsertedCount}`);
+        // 改為直接插入新紀錄 (Log 模式)，而非更新舊紀錄
+        const result = await collection.insertMany(documentsToSave);
+        console.log(`💾 [${fetchTime.toISOString()}] Success! Inserted: ${result.insertedCount} documents.`);
 
     } catch (error) {
         // 這裡我們將錯誤往上拋，讓外層的 loop 知道這次失敗了
