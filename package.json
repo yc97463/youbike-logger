@@ -1,0 +1,12 @@
+{
+    "scripts": {
+        "build": "tsc"
+    },
+    "dependencies": {
+        "mongodb": "^7.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^25.0.10",
+        "typescript": "^5.0.0"
+    }
+}
