@@ -1,6 +1,6 @@
 import { MongoClient, Db } from 'mongodb';
 
-// 定義資料介面
+// 定義 YouBike 站點資料介面
 interface YouBikeStation {
     station_no: string;
     name_tw: string;
@@ -16,10 +16,8 @@ interface YouBikeStation {
     fetched_at?: Date;
 }
 
-// 設定與環境變數
-// 預設值改為 Zeabur 內網格式 (方便本地測試時知道格式，但主要靠環境變數覆寫)
+// MongoDB 設定
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://mongo:cc@mongodb.zeabur.internal:27017/youbike-log-hualien?authSource=admin";
-// 資料庫名稱改為你指定的
 const DB_NAME = "youbike-log-hualien";
 const COLLECTION_NAME = "parking_info";
 
@@ -29,14 +27,9 @@ async function connectToDatabase(): Promise<Db> {
     if (cachedDb) {
         return cachedDb;
     }
-
-    // 設定連線選項
     const client = new MongoClient(MONGODB_URI);
-
     await client.connect();
     console.log("🔌 Connected to MongoDB");
-
-    // 這裡會優先使用 URI 裡指定的 DB，如果沒有則使用常數
     cachedDb = client.db(DB_NAME);
     return cachedDb;
 }
@@ -65,19 +58,39 @@ export const handler = async () => {
             throw new Error(`API responded with status: ${response.status}`);
         }
 
-        const data = await response.json() as YouBikeStation[];
+        // 1. 先將回傳結果視為 unknown，再進行檢查
+        const rawData = await response.json() as any;
 
-        if (data.length === 0) {
-            console.log("⚠️ No stations found.");
+        // 2. 嘗試找出真正的陣列資料 (YouBike API 通常包在 retVal 或 data 裡)
+        let stationList: YouBikeStation[] = [];
+
+        if (Array.isArray(rawData)) {
+            stationList = rawData;
+        } else if (Array.isArray(rawData.retVal)) {
+            stationList = rawData.retVal; // 常見格式 1
+        } else if (Array.isArray(rawData.data)) {
+            stationList = rawData.data;   // 常見格式 2
+        } else {
+            // 3. 如果都找不到，拋出錯誤並印出結構以便除錯
+            console.error("🔍 Unexpected API Response Structure:", JSON.stringify(rawData).substring(0, 200) + "...");
+            throw new Error("Could not find station array in response");
+        }
+
+        console.log(`📡 Fetched ${stationList.length} stations.`);
+
+        if (stationList.length === 0) {
+            console.log("⚠️ No stations found in range.");
             return;
         }
 
+        // 4. 資料處理
         const fetchTime = new Date();
-        const documentsToSave = data.map(station => ({
+        const documentsToSave = stationList.map(station => ({
             ...station,
             fetched_at: fetchTime
         }));
 
+        // 5. 寫入資料庫
         const db = await connectToDatabase();
         const collection = db.collection(COLLECTION_NAME);
 
@@ -90,17 +103,23 @@ export const handler = async () => {
         }));
 
         const result = await collection.bulkWrite(operations);
-        console.log(`💾 [${fetchTime.toISOString()}] Updated: ${result.modifiedCount}, Upserted: ${result.upsertedCount}, Matched: ${result.matchedCount}`);
+        console.log(`💾 [${fetchTime.toISOString()}] Success! Matched: ${result.matchedCount}, Modified: ${result.modifiedCount}, Upserted: ${result.upsertedCount}`);
 
     } catch (error) {
-        console.error("❌ Error:", error);
+        // 這裡我們將錯誤往上拋，讓外層的 loop 知道這次失敗了
+        console.error("❌ Job Error:", error);
+        throw error;
     }
 };
 
-// 讓 Docker 容器執行時能跑這段
+// Docker 進入點
 if (require.main === module) {
     handler()
         .then(() => console.log("✅ Job cycle finished"))
-        .catch((err) => console.error("🔥 Job cycle failed", err))
-        .finally(() => process.exit(0));
+        .catch((err) => {
+            // 這裡只印簡單訊息，詳細錯誤在 handler 內已經印過了
+            console.error("🔥 Job cycle failed");
+            // 注意：這裡不執行 process.exit(1)，以免 Docker 容器整個掛掉重啟，
+            // 我們讓它自然結束，等待下一次 loop (由 Dockerfile 中的 while loop 控制)
+        });
 }
